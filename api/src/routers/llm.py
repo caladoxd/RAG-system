@@ -3,8 +3,8 @@ from fastapi import APIRouter, File, Header, HTTPException, Query, Request, Uplo
 from ..dto.llm.index_document import IndexDocumentDto
 from ..dto.llm.query import QueryDto
 from ..dto.llm.search import SearchDto
-from ..entities.llm.query_response.entity import QueryResponse
-from ..entities.llm.search_response.entity import SearchResponse
+from ..entities.llm.query_response import QueryResponse
+from ..entities.llm.search_response import SearchResponse
 from ..services import llm_service, vector_store_service
 from ..services.vector_store_service import MilvusStoreError
 
