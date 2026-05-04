@@ -1,0 +1,41 @@
+# Docker / Compose persisted data (see volumes/README.md)
+volumes/
+
+# Python
+**/.venv/
+**/__pycache__/
+**/*.py[cod]
+**/*.egg-info/
+**/.eggs/
+**/dist/
+**/build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+.coverage.*
+*.cover
+
+# Secrets and local env
+.env
+**/.env
+
+# Node (monorepo root or nested)
+node_modules/
+
+# Logs & OS
+*.log
+.DS_Store
+Thumbs.db
+
+# Editors / IDEs
+.idea/
+*.swp
+*.swo
+
+# Prisma Python client (generated — safe to commit instead; remove this line if you version it)
+api/src/prisma_client/
+
+# Agent
+agent/
