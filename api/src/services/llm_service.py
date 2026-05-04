@@ -1,20 +1,27 @@
 import asyncio
 import io
 import logging
+import os
 import re
 import zipfile
 from pathlib import Path
-from typing import Final, Literal
+from typing import Any, Final, Literal
 
+import httpx
 import tiktoken
 
 from .embedding_service import embed_texts
 
 logger = logging.getLogger(__name__)
 
-TOKEN_LIMIT: Final[int] = 20
+TOKEN_LIMIT: Final[int] = 2000
 OVERLAP_RATIO: Final[float] = 0.2
 SEMANTIC_DISTANCE_PERCENTILE: Final[int] = 90
+GENERATION_MODEL: Final[str] = os.getenv("GENERATION_MODEL", "qwen/qwen3-4b")
+GENERATION_TIMEOUT_S: Final[float] = 120.0
+DEFAULT_MAX_OUTPUT_TOKENS: Final[int] = int(os.getenv("GENERATION_MAX_TOKENS", "600"))
+DEFAULT_TEMPERATURE: Final[float] = float(os.getenv("GENERATION_TEMPERATURE", "0.2"))
+MAX_CONTEXT_CHARS_PER_CHUNK: Final[int] = 2000
 
 _encoding: tiktoken.Encoding | None = None
 
@@ -255,6 +262,23 @@ def _extract_txt_sync(data: bytes) -> str:
     return data.decode("utf-8", errors="replace")
 
 
+def _build_rag_context(chunks: list[dict[str, Any]]) -> str:
+    parts: list[str] = []
+    for i, c in enumerate(chunks, start=1):
+        doc_id = c.get("doc_id") or ""
+        section_id = c.get("section_id") or ""
+        chunk_index = c.get("chunk_index")
+        text = str(c.get("text") or "").strip()
+        if not text:
+            continue
+        if len(text) > MAX_CONTEXT_CHARS_PER_CHUNK:
+            text = f"{text[:MAX_CONTEXT_CHARS_PER_CHUNK]}..."
+        parts.append(
+            f"[{i}] doc_id={doc_id} section_id={section_id} chunk_index={chunk_index}\n{text}"
+        )
+    return "\n\n".join(parts)    
+
+
 async def extract_text(
     document: bytes | str,
     *,
@@ -311,7 +335,63 @@ async def chunk_document(document: str) -> list[str]:
     return final
 
 
+async def generate_answer(
+    query: str,
+    chunks: list[dict[str, Any]],
+    *,
+    temperature: float = DEFAULT_TEMPERATURE,
+    max_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
+) -> str:
+    q = query.strip()
+    if not q:
+        return ""
+    context = _build_rag_context(chunks)
+    if not context:
+        return "I could not find relevant context to answer your question."
 
+    base = os.getenv("OPENAI_BASE_URL", "http://localhost:1234/v1").rstrip("/")
+    key = os.getenv("OPENAI_API_KEY", "lm-studio")
+    url = f"{base}/chat/completions"
 
-async def create_document(document: str):
-    return document
+    system_prompt = (
+        "You are a RAG assistant. Answer only using the provided context snippets. "
+        "If context is insufficient, say that clearly. Keep the answer concise and factual."
+    )
+    user_prompt = (
+        f"Question:\n{q}\n\n"
+        f"Context snippets:\n{context}\n\n"
+        "Provide the answer and include snippet citations like [1], [2] when used."
+    )
+
+    payload = {
+        "model": GENERATION_MODEL,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+    }
+    timeout = httpx.Timeout(GENERATION_TIMEOUT_S, connect=10.0)
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(
+                url,
+                headers={"Authorization": f"Bearer {key}"},
+                json=payload,
+            )
+            response.raise_for_status()
+            data = response.json()
+    except Exception as e:
+        logger.warning("Generation request failed: %s", e)
+        raise RuntimeError("Could not generate answer from retrieved context.") from e
+
+    choices = data.get("choices") or []
+    if not choices:
+        raise RuntimeError("Generation returned no choices.")
+    message = choices[0].get("message") or {}
+    answer = (message.get("content") or "").strip()
+    if not answer:
+        raise RuntimeError("Generation returned an empty answer.")
+    return answer
+

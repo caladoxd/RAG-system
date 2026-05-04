@@ -6,7 +6,6 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-# https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF
 EMBEDDING_MODEL: Final[str] = "nomic-ai/nomic-embed-text-v1.5-GGUF"
 EMBEDDING_DIM: Final[int] = int(os.getenv("EMBEDDING_DIMENSION", "768"))
 BATCH_SIZE: Final[int] = 64
