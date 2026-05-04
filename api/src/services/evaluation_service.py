@@ -5,6 +5,15 @@ import re
 import time
 from typing import Any
 
+from openai import AsyncOpenAI
+
+try:
+    from ragas.llms import llm_factory
+    from ragas.metrics.collections import Faithfulness
+except ImportError:  # pragma: no cover — minimal installs without RAGAS
+    llm_factory = None  # type: ignore[assignment,misc]
+    Faithfulness = None  # type: ignore[assignment,misc]
+
 logger = logging.getLogger(__name__)
 
 
@@ -163,8 +172,6 @@ async def _faithfulness_text_judge(
     max_ctx_chars: int = 1400,
 ) -> float:
     """Plain chat.completions (no response_format) for OpenAI-compatible servers that reject JSON mode."""
-    from openai import AsyncOpenAI
-
     lines: list[str] = []
     for i, c in enumerate(contexts):
         piece = c[:max_ctx_chars] + ("…" if len(c) > max_ctx_chars else "")
@@ -209,19 +216,6 @@ async def compute_faithfulness_ragas(
     def _elapsed_ms() -> float:
         return (time.perf_counter() - t_start) * 1000.0
 
-    try:
-        from openai import AsyncOpenAI
-        from ragas.llms import llm_factory
-        from ragas.metrics.collections import Faithfulness
-    except ImportError as e:
-        logger.warning("Faithfulness skipped (missing dependency): %s", e)
-        return {
-            "metric": "faithfulness",
-            "score": None,
-            "error": compact_faithfulness_error(f"Missing dependency: {e}"),
-            "duration_ms": floor_ms(_elapsed_ms()),
-        }
-
     base = os.getenv("OPENAI_BASE_URL", "http://localhost:1234/v1").rstrip("/")
     key = os.getenv("OPENAI_API_KEY", "lm-studio")
     model = (
@@ -230,12 +224,42 @@ async def compute_faithfulness_ragas(
         or "gpt-4o-mini"
     )
 
+    if llm_factory is None or Faithfulness is None:
+        logger.info("RAGAS not installed; using text-mode faithfulness judge only")
+        try:
+            score = await _faithfulness_text_judge(
+                user_input=user_input,
+                response=response,
+                contexts=contexts,
+                base=base,
+                key=key,
+                model=model,
+            )
+            return {
+                "metric": "faithfulness",
+                "score": score,
+                "error": None,
+                "duration_ms": floor_ms(_elapsed_ms()),
+            }
+        except Exception as fb_e:
+            logger.warning("Faithfulness failed (text judge, no RAGAS): %s", fb_e)
+            return {
+                "metric": "faithfulness",
+                "score": None,
+                "error": compact_faithfulness_error(str(fb_e)),
+                "duration_ms": floor_ms(_elapsed_ms()),
+            }
+
+    ragas_llm_factory = llm_factory
+    RagasFaithfulness = Faithfulness
+    assert ragas_llm_factory is not None and RagasFaithfulness is not None
+
     async_client = AsyncOpenAI(api_key=key, base_url=base)
 
     async def _ascore_with(llm_extra: dict[str, Any]) -> Any:
         """RAGAS collections Faithfulness only supports async scoring via ascore()."""
-        llm = llm_factory(model, client=async_client, **llm_extra)
-        return await Faithfulness(llm=llm).ascore(
+        llm = ragas_llm_factory(model, client=async_client, **llm_extra)
+        return await RagasFaithfulness(llm=llm).ascore(
             user_input=user_input,
             response=response,
             retrieved_contexts=contexts,

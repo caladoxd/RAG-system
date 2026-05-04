@@ -7,6 +7,8 @@ import os
 import threading
 from typing import Any
 
+from sentence_transformers import CrossEncoder
+
 logger = logging.getLogger(__name__)
 
 _lock = threading.Lock()
@@ -23,7 +25,6 @@ def model_name() -> str:
 
 def _load_sync() -> Any:
     global _model, _model_id
-    from sentence_transformers import CrossEncoder
 
     name = model_name()
     with _lock:
@@ -34,6 +35,11 @@ def _load_sync() -> Any:
         _model = CrossEncoder(name, max_length=max_len)
         _model_id = name
         return _model
+
+
+def warm_up_cross_encoder() -> None:
+    """Load cross-encoder weights during app startup so the first query is not slow."""
+    _load_sync()
 
 
 def score_query_passages_sync(query: str, passages: list[str]) -> list[float]:

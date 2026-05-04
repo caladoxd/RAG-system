@@ -41,6 +41,15 @@ def connections_has_default() -> bool:
     return connections.has_connection("default")
 
 
+def warm_up_milvus_sync() -> None:
+    """Connect to Milvus during startup so the first search skips the gRPC handshake."""
+    try:
+        if not connections_has_default():
+            _connect_sync()
+    except Exception as e:
+        logger.warning("Milvus startup warm-up skipped: %s", e)
+
+
 def _ensure_collection_sync() -> Any:
     from pymilvus import (
         Collection,

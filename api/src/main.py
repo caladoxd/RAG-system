@@ -1,6 +1,8 @@
+import asyncio
 import base64
 import logging
 import os
+import time
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
@@ -29,6 +31,30 @@ def _env_flag(name: str) -> bool:
     return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+async def _run_startup_warmup() -> None:
+    """Pay one-time ML / network costs before the first user request."""
+    from .services import embedding_service, reranker_service, vector_store_service
+
+    t0 = time.perf_counter()
+    try:
+        await asyncio.to_thread(reranker_service.warm_up_cross_encoder)
+    except Exception:
+        logger.exception("Cross-encoder startup warm-up failed")
+    try:
+        await asyncio.to_thread(vector_store_service.warm_up_milvus_sync)
+    except Exception:
+        logger.exception("Milvus startup warm-up failed")
+    try:
+        emb = await embedding_service.embed_texts(["warmup"])
+        if emb is None:
+            logger.warning(
+                "Embedding warm-up returned no vectors; first retrieval may be slower"
+            )
+    except Exception:
+        logger.exception("Embedding startup warm-up failed")
+    logger.info("Startup warm-up finished in %.2fs", time.perf_counter() - t0)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     load_dotenv()
@@ -49,6 +75,10 @@ async def lifespan(app: FastAPI):
                 )
             else:
                 raise
+    if not _env_flag("SKIP_STARTUP_WARMUP"):
+        await _run_startup_warmup()
+    else:
+        logger.warning("SKIP_STARTUP_WARMUP is set; skipping cross-encoder / Milvus / embedding warm-up")
     yield
     logger.info("Shutting down...")
     if prisma_connected:
