@@ -1,4 +1,6 @@
 import base64
+import logging
+import os
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
@@ -8,6 +10,8 @@ from starlette.responses import JSONResponse
 
 from .prisma import prisma
 from .routers import llm, user
+
+logger = logging.getLogger(__name__)
 
 
 def _sanitize_validation_detail(obj: object) -> object:
@@ -21,13 +25,37 @@ def _sanitize_validation_detail(obj: object) -> object:
     return obj
 
 
+def _env_flag(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     load_dotenv()
-    await prisma.connect()
+    prisma_connected = False
+    if _env_flag("SKIP_PRISMA_CONNECT"):
+        logger.warning(
+            "SKIP_PRISMA_CONNECT is set; skipping Prisma. User routes need a DB connection."
+        )
+    else:
+        try:
+            await prisma.connect()
+            prisma_connected = True
+        except Exception:
+            logger.exception("Prisma connect failed")
+            if _env_flag("PRISMA_FAIL_OPEN"):
+                logger.warning(
+                    "PRISMA_FAIL_OPEN is set; starting without database (user routes will error)."
+                )
+            else:
+                raise
     yield
-    print("Shutting down...")
-    await prisma.disconnect()
+    logger.info("Shutting down...")
+    if prisma_connected:
+        try:
+            await prisma.disconnect()
+        except Exception:
+            logger.exception("Prisma disconnect failed")
     try:
         from pymilvus import connections
 

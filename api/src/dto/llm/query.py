@@ -13,3 +13,7 @@ class QueryDto(BaseModel):
     candidate_multiplier: int = Field(default=8, ge=2, le=30)
     temperature: float = Field(default=0.2, ge=0.0, le=2.0)
     max_tokens: int = Field(default=600, ge=64, le=4000)
+    metrics: bool = Field(
+        default=False,
+        description="If true, response includes retrieval and citation diagnostics (no extra UI labels).",
+    )

@@ -3,9 +3,9 @@ from fastapi import APIRouter, File, Header, HTTPException, Query, Request, Uplo
 from ..dto.llm.index_document import IndexDocumentDto
 from ..dto.llm.query import QueryDto
 from ..dto.llm.search import SearchDto
-from ..entities.llm.query_response import QueryResponse
+from ..entities.llm.query_response import QueryMetrics, QueryResponse
 from ..entities.llm.search_response import SearchResponse
-from ..services import llm_service, vector_store_service
+from ..services import evaluation_service, llm_service, vector_store_service
 from ..services.vector_store_service import MilvusStoreError
 
 router = APIRouter(prefix="/llm", tags=["llm"])
@@ -135,7 +135,20 @@ async def query_chunks(body: QueryDto) -> QueryResponse:
             temperature=body.temperature,
             max_tokens=body.max_tokens,
         )
-        return QueryResponse(answer=answer, context_results=context_results)
+        metrics: QueryMetrics | None = None
+        if body.metrics:
+            raw = evaluation_service.build_query_metrics(
+                hybrid_results=retrieved.get("hybrid_results") or [],
+                reranked_results=context_results,
+                k=body.top_k,
+                answer=answer,
+            )
+            metrics = QueryMetrics.model_validate(raw)
+        return QueryResponse(
+            answer=answer,
+            context_results=context_results,
+            metrics=metrics,
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except RuntimeError as e:
