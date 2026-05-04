@@ -3,6 +3,7 @@ import asyncio
 import logging
 import os
 import re
+import time
 from typing import Any
 
 from . import llm_service
@@ -315,6 +316,16 @@ def _insert_sync(doc_id: str, chunks: list[str], embeddings: list[list[float]], 
     return len(chunks)
 
 
+def _empty_timings_ms() -> dict[str, float]:
+    return {
+        "milvus_ann_ms": 0.0,
+        "milvus_hit_materialize_ms": 0.0,
+        "bm25_rrf_ms": 0.0,
+        "cross_encoder_rerank_ms": 0.0,
+        "vector_finalize_ms": 0.0,
+    }
+
+
 def _search_sync(
     query_vector: list[float],
     query_text: str,
@@ -326,13 +337,23 @@ def _search_sync(
     cross_encoder: bool,
     rerank_pool: int,
     candidate_multiplier: int,
-) -> dict[str, list[dict[str, Any]]]:
+    *,
+    collect_timings: bool = False,
+) -> dict[str, Any]:
     from pymilvus import Collection, utility
+
+    timings_ms: dict[str, float] = _empty_timings_ms() if collect_timings else {}
+
+    def _pack(out: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
+        if collect_timings:
+            out = dict(out)
+            out["timings_ms"] = timings_ms
+        return out
 
     if not connections_has_default():
         _connect_sync()
     if not utility.has_collection(_collection_name):
-        return {"hybrid_results": [], "reranked_results": []}
+        return _pack({"hybrid_results": [], "reranked_results": []})
     col = Collection(_collection_name)
     col.load()
     expr = _expr_doc_id(doc_id) if doc_id else None
@@ -340,6 +361,7 @@ def _search_sync(
     if hybrid:
         milvus_limit = min(300, max(top_k * candidate_multiplier, top_k + 5))
     try:
+        t0 = time.perf_counter()
         res: Any = col.search(
             data=[query_vector],
             anns_field="embedding",
@@ -348,24 +370,42 @@ def _search_sync(
             expr=expr,
             output_fields=["doc_id", "section_id", "chunk_index", "text"],
         )
+        if collect_timings:
+            timings_ms["milvus_ann_ms"] = (time.perf_counter() - t0) * 1000.0
     except Exception as e:
         logger.warning("Milvus search failed: %s", e)
-        return {"hybrid_results": [], "reranked_results": []}
+        return _pack({"hybrid_results": [], "reranked_results": []})
+    t_hits = time.perf_counter()
     hits: list[dict[str, Any]] = []
     for hit_group in res:
         for hit in hit_group:
             dist = float(hit.get("distance") or hit.get("score") or 0.0)
             hits.append(_milvus_hit_to_candidate(hit, dist))
+    if collect_timings:
+        timings_ms["milvus_hit_materialize_ms"] = (time.perf_counter() - t_hits) * 1000.0
     if hybrid:
+        t_bm = time.perf_counter()
         fused = _bm25_rrf_rerank(query_text, hits, rrf_k, rrf_k_bm25)
+        if collect_timings:
+            timings_ms["bm25_rrf_ms"] = (time.perf_counter() - t_bm) * 1000.0
         pool = fused[: max(rerank_pool, top_k)]
         if cross_encoder and pool:
+            t_ce = time.perf_counter()
             reranked = _cross_encoder_rerank_rows_sync(query_text, pool, top_k)
-            return {"hybrid_results": fused, "reranked_results": reranked}
-        return {"hybrid_results": fused, "reranked_results": fused[:top_k]}
+            if collect_timings:
+                timings_ms["cross_encoder_rerank_ms"] = (time.perf_counter() - t_ce) * 1000.0
+            return _pack({"hybrid_results": fused, "reranked_results": reranked})
+        if collect_timings:
+            timings_ms["cross_encoder_rerank_ms"] = 0.0
+        return _pack({"hybrid_results": fused, "reranked_results": fused[:top_k]})
+    t_fin = time.perf_counter()
     vec_all = _finalize_hits_vector_only(hits, len(hits))
     vec_top = _finalize_hits_vector_only(hits, top_k)
-    return {"hybrid_results": vec_all, "reranked_results": vec_top}
+    if collect_timings:
+        timings_ms["vector_finalize_ms"] = (time.perf_counter() - t_fin) * 1000.0
+        timings_ms["bm25_rrf_ms"] = 0.0
+        timings_ms["cross_encoder_rerank_ms"] = 0.0
+    return _pack({"hybrid_results": vec_all, "reranked_results": vec_top})
 
 
 async def ingest_document(
@@ -415,17 +455,28 @@ async def search(
     cross_encoder: bool = True,
     rerank_pool: int = 40,
     candidate_multiplier: int = 8,
-) -> dict[str, list[dict[str, Any]]]:
+    include_timings: bool = False,
+) -> dict[str, Any]:
     q = query.strip()
     if not q:
-        return {"hybrid_results": [], "reranked_results": []}
+        out: dict[str, Any] = {"hybrid_results": [], "reranked_results": []}
+        if include_timings:
+            out["timings_ms"] = {
+                "query_embedding_ms": 0.0,
+                "retrieval_thread_ms": 0.0,
+                **_empty_timings_ms(),
+            }
+        return out
+    t_embed = time.perf_counter()
     emb_list = await embed_texts([q])
+    query_embedding_ms = (time.perf_counter() - t_embed) * 1000.0
     if emb_list is None or not emb_list:
         raise RuntimeError("Could not embed query text.")
     vec = emb_list[0]
     try:
         async with _lock:
-            return await asyncio.to_thread(
+            t_thread = time.perf_counter()
+            result = await asyncio.to_thread(
                 _search_sync,
                 vec,
                 q,
@@ -437,7 +488,16 @@ async def search(
                 cross_encoder,
                 rerank_pool,
                 candidate_multiplier,
+                collect_timings=include_timings,
             )
+            retrieval_thread_ms = (time.perf_counter() - t_thread) * 1000.0
+        if include_timings:
+            result = dict(result)
+            tm = dict(result.pop("timings_ms", _empty_timings_ms()))
+            tm["query_embedding_ms"] = query_embedding_ms
+            tm["retrieval_thread_ms"] = retrieval_thread_ms
+            result["timings_ms"] = tm
+        return result
     except Exception as e:
         logger.exception("Milvus search failed")
         raise MilvusStoreError(str(e)) from e

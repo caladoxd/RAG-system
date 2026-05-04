@@ -3,6 +3,7 @@ import io
 import logging
 import os
 import re
+import time
 import zipfile
 from pathlib import Path
 from typing import Any, Final, Literal
@@ -341,13 +342,25 @@ async def generate_answer(
     *,
     temperature: float = DEFAULT_TEMPERATURE,
     max_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
-) -> str:
+    collect_timings: bool = False,
+) -> tuple[str, dict[str, float]]:
+    latencies_ms: dict[str, float] = {
+        "generation_context_build_ms": 0.0,
+        "generation_llm_ms": 0.0,
+    }
+
+    def _done(answer: str) -> tuple[str, dict[str, float]]:
+        return (answer, latencies_ms if collect_timings else {})
+
     q = query.strip()
     if not q:
-        return ""
+        return _done("")
+    t_ctx = time.perf_counter()
     context = _build_rag_context(chunks)
+    if collect_timings:
+        latencies_ms["generation_context_build_ms"] = (time.perf_counter() - t_ctx) * 1000.0
     if not context:
-        return "I could not find relevant context to answer your question."
+        return _done("I could not find relevant context to answer your question.")
 
     base = os.getenv("OPENAI_BASE_URL", "http://localhost:1234/v1").rstrip("/")
     key = os.getenv("OPENAI_API_KEY", "lm-studio")
@@ -375,6 +388,7 @@ async def generate_answer(
     timeout = httpx.Timeout(GENERATION_TIMEOUT_S, connect=10.0)
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
+            t_llm = time.perf_counter()
             response = await client.post(
                 url,
                 headers={"Authorization": f"Bearer {key}"},
@@ -382,6 +396,8 @@ async def generate_answer(
             )
             response.raise_for_status()
             data = response.json()
+            if collect_timings:
+                latencies_ms["generation_llm_ms"] = (time.perf_counter() - t_llm) * 1000.0
     except Exception as e:
         logger.warning("Generation request failed: %s", e)
         raise RuntimeError("Could not generate answer from retrieved context.") from e
@@ -393,5 +409,5 @@ async def generate_answer(
     answer = (message.get("content") or "").strip()
     if not answer:
         raise RuntimeError("Generation returned an empty answer.")
-    return answer
+    return _done(answer)
 

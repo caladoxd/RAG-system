@@ -15,6 +15,22 @@ class RetrievalRecallAtKMetric(BaseModel):
     )
 
 
+class FaithfulnessMetric(BaseModel):
+    metric: str = Field(default="faithfulness", description="RAGAS faithfulness (answer vs contexts).")
+    score: float | None = Field(
+        default=None,
+        description="0–1 when scoring succeeded.",
+    )
+    error: str | None = Field(
+        default=None,
+        description="Set when the judge LLM call failed or dependencies are missing.",
+    )
+    duration_ms: int | None = Field(
+        default=None,
+        description="Wall time for the faithfulness judge run (floored ms).",
+    )
+
+
 class CitationCoverageMetric(BaseModel):
     context_chunk_count: int
     cited_positions: list[int] = Field(
@@ -38,6 +54,14 @@ class QueryMetrics(BaseModel):
     citations: CitationCoverageMetric | None = Field(
         default=None,
         description="How many [n] citations in the answer map to context snippet positions.",
+    )
+    faithfulness: FaithfulnessMetric | None = Field(
+        default=None,
+        description="RAGAS faithfulness when metrics=true (uses OPENAI_BASE_URL / RAGAS_EVAL_MODEL).",
+    )
+    latencies_ms: dict[str, int] | None = Field(
+        default=None,
+        description="Per-step wall times in floored whole milliseconds (retrieval, generation, metrics, handler).",
     )
 
 

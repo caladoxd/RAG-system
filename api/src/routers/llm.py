@@ -1,3 +1,5 @@
+import time
+
 from fastapi import APIRouter, File, Header, HTTPException, Query, Request, UploadFile
 
 from ..dto.llm.index_document import IndexDocumentDto
@@ -117,6 +119,8 @@ async def search_chunks(body: SearchDto) -> SearchResponse:
 @router.post("/query", response_model=QueryResponse)
 async def query_chunks(body: QueryDto) -> QueryResponse:
     try:
+        t_handler = time.perf_counter()
+        latencies_ms: dict[str, float] = {}
         retrieved = await vector_store_service.search(
             body.query,
             top_k=body.top_k,
@@ -127,14 +131,20 @@ async def query_chunks(body: QueryDto) -> QueryResponse:
             cross_encoder=body.cross_encoder,
             rerank_pool=body.rerank_pool,
             candidate_multiplier=body.candidate_multiplier,
+            include_timings=body.metrics,
         )
+        if body.metrics:
+            latencies_ms.update(dict(retrieved.get("timings_ms") or {}))
         context_results = retrieved.get("reranked_results") or []
-        answer = await llm_service.generate_answer(
+        answer, gen_latencies = await llm_service.generate_answer(
             body.query,
             context_results,
             temperature=body.temperature,
             max_tokens=body.max_tokens,
+            collect_timings=body.metrics,
         )
+        if body.metrics:
+            latencies_ms.update(gen_latencies)
         metrics: QueryMetrics | None = None
         if body.metrics:
             raw = evaluation_service.build_query_metrics(
@@ -142,7 +152,20 @@ async def query_chunks(body: QueryDto) -> QueryResponse:
                 reranked_results=context_results,
                 k=body.top_k,
                 answer=answer,
+                latencies_ms=latencies_ms,
             )
+            fb = await evaluation_service.compute_faithfulness_ragas(
+                user_input=body.query,
+                response=answer,
+                reranked_results=context_results,
+            )
+            if fb is not None:
+                raw["faithfulness"] = fb
+                dm = fb.get("duration_ms")
+                if isinstance(dm, (int, float)):
+                    latencies_ms["metrics_faithfulness_ms"] = float(dm)
+            latencies_ms["query_handler_wall_ms"] = (time.perf_counter() - t_handler) * 1000.0
+            raw["latencies_ms"] = evaluation_service.floor_latency_map_ms(dict(latencies_ms))
             metrics = QueryMetrics.model_validate(raw)
         return QueryResponse(
             answer=answer,
