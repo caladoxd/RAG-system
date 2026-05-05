@@ -15,6 +15,7 @@ except ImportError:  # pragma: no cover — minimal installs without RAGAS
     Faithfulness = None  # type: ignore[assignment,misc]
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 
 def floor_latency_map_ms(values: dict[str, Any]) -> dict[str, int]:
