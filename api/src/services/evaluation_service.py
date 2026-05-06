@@ -3,15 +3,19 @@ import math
 import os
 import re
 import time
-from typing import Any
+from typing import Any, cast
 
 from openai import AsyncOpenAI
 
 try:
+    from ragas.embeddings.base import embedding_factory
     from ragas.llms import llm_factory
-    from ragas.metrics.collections import Faithfulness
+    from ragas.metrics.collections import AnswerRelevancy, ContextRelevance, Faithfulness
 except ImportError:  # pragma: no cover — minimal installs without RAGAS
+    embedding_factory = None  # type: ignore[assignment,misc]
     llm_factory = None  # type: ignore[assignment,misc]
+    AnswerRelevancy = None  # type: ignore[assignment,misc]
+    ContextRelevance = None  # type: ignore[assignment,misc]
     Faithfulness = None  # type: ignore[assignment,misc]
 
 logger = logging.getLogger(__name__)
@@ -140,23 +144,82 @@ def citation_coverage(answer: str, context_chunk_count: int) -> dict[str, Any] |
     }
 
 
-def _retrieved_context_strings(reranked_results: list[dict[str, Any]]) -> list[str]:
+def _retrieved_context_strings(
+    reranked_results: list[dict[str, Any]],
+    *,
+    top_n: int = 5,
+    max_chars_per_chunk: int = 1400,
+) -> list[str]:
+    """Prepare cleaner, bounded contexts for LLM judges."""
     texts: list[str] = []
-    for row in reranked_results:
+    for row in reranked_results[: max(1, top_n)]:
         t = str(row.get("text") or "").strip()
         if t:
+            # PDF extraction often includes excessive whitespace/newlines.
+            t = re.sub(r"\s+", " ", t).strip()
+            if len(t) > max_chars_per_chunk:
+                t = t[:max_chars_per_chunk].rstrip() + "..."
             texts.append(t)
     return texts
 
 
-def _parse_zero_one_score(text: str) -> float | None:
-    """Parse a single faithfulness score in [0, 1] from model output."""
-    raw = (text or "").strip()
-    m = re.search(r"\b(0?\.\d+|0|1(?:\.0+)?)\b", raw)
-    if not m:
+def _llm_metric_payload(metric: str, score: float | None, error: str | None, duration_ms: float) -> dict[str, Any]:
+    return {
+        "metric": metric,
+        "score": score,
+        "error": error,
+        "duration_ms": floor_ms(duration_ms),
+    }
+
+
+def _coerce_score_0_1(raw: Any) -> float | None:
+    if raw is None:
         return None
     try:
-        v = float(m.group(1))
+        score = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(score) or math.isinf(score):
+        return None
+    return max(0.0, min(1.0, score))
+
+
+def _parse_zero_one_score(text: str) -> float | None:
+    """Parse a score in [0, 1] from model output.
+
+    Heuristic order:
+    1) Prefer explicit labels like "score: 0.82"
+    2) Prefer a standalone numeric last line
+    3) Fallback to the last valid numeric token in the full text
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return None
+
+    explicit = re.search(
+        r"(?i)\b(?:score|faithfulness|relevancy|relevance)\b\s*[:=]\s*(0?\.\d+|0|1(?:\.0+)?)\b",
+        raw,
+    )
+    if explicit:
+        try:
+            return max(0.0, min(1.0, float(explicit.group(1))))
+        except ValueError:
+            pass
+
+    lines = [ln.strip() for ln in raw.splitlines() if ln.strip()]
+    if lines:
+        last = lines[-1]
+        if re.fullmatch(r"(0?\.\d+|0|1(?:\.0+)?)", last):
+            try:
+                return max(0.0, min(1.0, float(last)))
+            except ValueError:
+                pass
+
+    matches = re.findall(r"\b(0?\.\d+|0|1(?:\.0+)?)\b", raw)
+    if not matches:
+        return None
+    try:
+        v = float(matches[-1])
     except ValueError:
         return None
     return max(0.0, min(1.0, v))
@@ -209,7 +272,11 @@ async def compute_faithfulness_ragas(
     reranked_results: list[dict[str, Any]],
 ) -> dict[str, Any] | None:
     """RAGAS faithfulness: claims in the answer vs retrieved contexts (requires LLM judge)."""
-    contexts = _retrieved_context_strings(reranked_results)
+    contexts = _retrieved_context_strings(
+        reranked_results,
+        top_n=5,
+        max_chars_per_chunk=1800,
+    )
     if not contexts or not (response or "").strip():
         return None
     t_start = time.perf_counter()
@@ -330,6 +397,197 @@ async def compute_faithfulness_ragas(
                 "error": compact_faithfulness_error(f"{ragas_e!s}; fallback: {fb_e!s}"),
                 "duration_ms": floor_ms(_elapsed_ms()),
             }
+
+
+async def compute_additional_ragas_metrics(
+    *,
+    user_input: str,
+    response: str,
+    reranked_results: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Compute AnswerRelevancy + ContextRelevance with isolated failures per metric."""
+    contexts = _retrieved_context_strings(
+        reranked_results,
+        top_n=1,
+        max_chars_per_chunk=1200,
+    )
+    if not contexts or not (response or "").strip() or not (user_input or "").strip():
+        return {}
+
+    base = os.getenv("OPENAI_BASE_URL", "http://localhost:1234/v1").rstrip("/")
+    key = os.getenv("OPENAI_API_KEY", "lm-studio")
+    model = (
+        (os.getenv("RAGAS_EVAL_MODEL") or "").strip()
+        or (os.getenv("GENERATION_MODEL") or "").strip()
+        or "gpt-4o-mini"
+    )
+    emb_model = (os.getenv("RAGAS_EMBEDDING_MODEL") or "").strip() or "text-embedding-3-small"
+
+    if (
+        llm_factory is None
+        or embedding_factory is None
+        or AnswerRelevancy is None
+        or ContextRelevance is None
+    ):
+        msg = "RAGAS dependencies missing for additional metrics"
+        return {
+            "answer_relevancy": _llm_metric_payload(
+                "answer_relevancy", None, compact_faithfulness_error(msg), 0.0
+            ),
+            "context_relevance": _llm_metric_payload(
+                "context_relevance", None, compact_faithfulness_error(msg), 0.0
+            ),
+        }
+
+    ragas_llm_factory = llm_factory
+    ragas_embedding_factory = embedding_factory
+    RagasAnswerRelevancy = AnswerRelevancy
+    RagasContextRelevance = ContextRelevance
+    assert ragas_llm_factory is not None
+    assert ragas_embedding_factory is not None
+    assert RagasAnswerRelevancy is not None
+    assert RagasContextRelevance is not None
+
+    async_client = AsyncOpenAI(api_key=key, base_url=base)
+    explicit = os.getenv("RAGAS_LLM_ADAPTER", "").strip().lower()
+    if explicit in ("litellm", "instructor"):
+        llm_attempts: list[dict[str, Any]] = [{"adapter": explicit}]
+    elif explicit in ("none", "minimal", "default"):
+        llm_attempts = [{}]
+    else:
+        # Local OpenAI-compatible servers are usually happier with litellm first.
+        llm_attempts = [{"adapter": "litellm"}, {}, {"adapter": "instructor"}]
+
+    out: dict[str, dict[str, Any]] = {}
+
+    async def _answer_relevancy_text_fallback() -> float:
+        prompt = (
+            "Score how relevant the assistant answer is to the user question.\n"
+            "Return only a number between 0 and 1.\n\n"
+            f"User question:\n{user_input}\n\n"
+            f"Assistant answer:\n{response}\n\n"
+            "0 means off-topic or evasive. 1 means directly and completely answers the question."
+        )
+        r = await async_client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.0,
+            max_tokens=32,
+        )
+        s = _coerce_score_0_1(_parse_zero_one_score(r.choices[0].message.content or ""))
+        if s is None:
+            raise ValueError("answer_relevancy fallback judge did not return a valid 0-1 score")
+        return s
+
+    async def _context_relevance_text_fallback() -> float:
+        ctx = "\n".join(f"[{i + 1}] {c[:1200]}" for i, c in enumerate(contexts))
+        prompt = (
+            "Score how relevant the retrieved context is to the user question.\n"
+            "Return only a number between 0 and 1.\n\n"
+            f"User question:\n{user_input}\n\n"
+            f"Retrieved context:\n{ctx}\n\n"
+            "0 means irrelevant. 1 means highly relevant and sufficient."
+        )
+        r = await async_client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.0,
+            max_tokens=32,
+        )
+        s = _coerce_score_0_1(_parse_zero_one_score(r.choices[0].message.content or ""))
+        if s is None:
+            raise ValueError("context_relevance fallback judge did not return a valid 0-1 score")
+        return s
+
+    t0 = time.perf_counter()
+    try:
+        result: Any = None
+        last: Exception | None = None
+        for llm_extra in llm_attempts:
+            try:
+                llm = ragas_llm_factory(model, client=async_client, **llm_extra)
+                embeddings = ragas_embedding_factory(
+                    provider="openai",
+                    model=emb_model,
+                    client=async_client,
+                )
+                metric = RagasAnswerRelevancy(llm=llm, embeddings=cast(Any, embeddings))
+                result = await metric.ascore(user_input=user_input, response=response)
+                break
+            except Exception as e:
+                last = e
+                if _is_response_format_error(str(e)) or _is_sync_client_agenerate_error(e):
+                    continue
+                raise
+        if result is None:
+            raise last if last is not None else RuntimeError("answer_relevancy: no result")
+        raw = getattr(result, "value", result)
+        score = _coerce_score_0_1(raw)
+        if score is None:
+            raise ValueError("answer_relevancy returned NaN/invalid score")
+        out["answer_relevancy"] = _llm_metric_payload(
+            "answer_relevancy", score, None, (time.perf_counter() - t0) * 1000.0
+        )
+    except Exception as e:
+        try:
+            score = await _answer_relevancy_text_fallback()
+            out["answer_relevancy"] = _llm_metric_payload(
+                "answer_relevancy", score, None, (time.perf_counter() - t0) * 1000.0
+            )
+        except Exception as fb_e:
+            err = compact_faithfulness_error(f"{e}; fallback: {fb_e}")
+            out["answer_relevancy"] = _llm_metric_payload(
+                "answer_relevancy",
+                None,
+                err,
+                (time.perf_counter() - t0) * 1000.0,
+            )
+
+    t1 = time.perf_counter()
+    try:
+        best_score: float | None = None
+        last: Exception | None = None
+        any_success = False
+        for llm_extra in llm_attempts:
+            try:
+                llm = ragas_llm_factory(model, client=async_client, **llm_extra)
+                metric = RagasContextRelevance(llm=llm)
+                result = await metric.ascore(user_input=user_input, retrieved_contexts=contexts)
+                any_success = True
+                raw = getattr(result, "value", result)
+                score_try = _coerce_score_0_1(raw)
+                if score_try is not None:
+                    if best_score is None or score_try > best_score:
+                        best_score = score_try
+            except Exception as e:
+                last = e
+                if _is_response_format_error(str(e)) or _is_sync_client_agenerate_error(e):
+                    continue
+                raise
+        if not any_success:
+            raise last if last is not None else RuntimeError("context_relevance: no result")
+        score = best_score
+        if score is None:
+            raise ValueError("context_relevance returned NaN/invalid score")
+        out["context_relevance"] = _llm_metric_payload(
+            "context_relevance", score, None, (time.perf_counter() - t1) * 1000.0
+        )
+    except Exception as e:
+        try:
+            score = await _context_relevance_text_fallback()
+            out["context_relevance"] = _llm_metric_payload(
+                "context_relevance", score, None, (time.perf_counter() - t1) * 1000.0
+            )
+        except Exception as fb_e:
+            err = compact_faithfulness_error(f"{e}; fallback: {fb_e}")
+            out["context_relevance"] = _llm_metric_payload(
+                "context_relevance",
+                None,
+                err,
+                (time.perf_counter() - t1) * 1000.0,
+            )
+
+    return out
 
 
 def build_query_metrics(

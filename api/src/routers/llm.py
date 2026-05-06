@@ -154,6 +154,23 @@ async def query_chunks(body: QueryDto) -> QueryResponse:
                 answer=answer,
                 latencies_ms=latencies_ms,
             )
+            extra = await evaluation_service.compute_additional_ragas_metrics(
+                user_input=body.query,
+                response=answer,
+                reranked_results=context_results,
+            )
+            ar = extra.get("answer_relevancy")
+            if ar is not None:
+                raw["answer_relevancy"] = ar
+                dm = ar.get("duration_ms")
+                if isinstance(dm, (int, float)):
+                    latencies_ms["metrics_answer_relevancy_ms"] = float(dm)
+            cr = extra.get("context_relevance")
+            if cr is not None:
+                raw["context_relevance"] = cr
+                dm = cr.get("duration_ms")
+                if isinstance(dm, (int, float)):
+                    latencies_ms["metrics_context_relevance_ms"] = float(dm)
             fb = await evaluation_service.compute_faithfulness_ragas(
                 user_input=body.query,
                 response=answer,

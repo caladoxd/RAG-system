@@ -31,6 +31,19 @@ class FaithfulnessMetric(BaseModel):
     )
 
 
+class LLMJudgeMetric(BaseModel):
+    metric: str
+    score: float | None = Field(default=None, description="0-1 when scoring succeeded.")
+    error: str | None = Field(
+        default=None,
+        description="Set when the judge LLM call failed or dependencies are missing.",
+    )
+    duration_ms: int | None = Field(
+        default=None,
+        description="Wall time for the judge run (floored ms).",
+    )
+
+
 class CitationCoverageMetric(BaseModel):
     context_chunk_count: int
     cited_positions: list[int] = Field(
@@ -55,9 +68,17 @@ class QueryMetrics(BaseModel):
         default=None,
         description="How many [n] citations in the answer map to context snippet positions.",
     )
+    context_relevance: LLMJudgeMetric | None = Field(
+        default=None,
+        description="RAGAS context relevance when metrics=true.",
+    )
     faithfulness: FaithfulnessMetric | None = Field(
         default=None,
         description="RAGAS faithfulness when metrics=true (uses OPENAI_BASE_URL / RAGAS_EVAL_MODEL).",
+    )
+    answer_relevancy: LLMJudgeMetric | None = Field(
+        default=None,
+        description="RAGAS answer relevancy when metrics=true.",
     )
     latencies_ms: dict[str, int] | None = Field(
         default=None,

@@ -17,7 +17,9 @@ Production-oriented Retrieval-Augmented Generation (RAG) application with docume
 - Optionally computes evaluation diagnostics:
   - retrieval recall@k
   - citation coverage
+  - answer relevancy (RAGAS)
   - faithfulness (RAGAS + robust fallback)
+  - context relevance (RAGAS)
   - per-step latencies
 
 ## Tech Stack
@@ -124,6 +126,7 @@ Common variables used by the API:
 - `OPENAI_API_KEY` - API key/token
 - `GENERATION_MODEL` - model used for answer generation
 - `RAGAS_EVAL_MODEL` - optional model for evaluation
+- `RAGAS_EMBEDDING_MODEL` - embedding model used by answer relevancy
 - `MILVUS_HOST`, `MILVUS_PORT` - Milvus connection
 - `SKIP_PRISMA_CONNECT=true` - run without DB on startup
 - `PRISMA_FAIL_OPEN=true` - don't crash if Prisma connect fails
@@ -134,6 +137,7 @@ Common variables used by the API:
 - Practical handling of local-model quirks and OpenAI-compatible edge cases
 - Startup warm-up to reduce cold-start latency
 - Latency instrumentation for retrieval, generation, and metrics pipeline
+- RAGAS metrics for context relevancy, faithfulness, and answer relevance
 - Robust evaluation path with graceful fallback when structured judge calls fail
 - Cleaner domain modeling (`dto/` vs `entities/`) and modular service boundaries
 
