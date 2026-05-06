@@ -8,7 +8,7 @@ function App() {
       <header className="rag-header">
         <h1 className="!mt-0">RAG workspace</h1>
         <p className="rag-lead">
-          Index documents into the vector store, then ask questions grounded on retrieved chunks.
+          Store documents in the vector DB, then ask questions grounded on retrieved data.
         </p>
       </header>
       <main className="rag-main">

@@ -5,7 +5,7 @@ import { readApiError } from '../api/http'
 type Mode = 'file' | 'text'
 
 export default function DocumentUpload() {
-  const [open, setOpen] = useState(true)
+  const [open, setOpen] = useState(false)
   const [mode, setMode] = useState<Mode>('file')
   const [docId, setDocId] = useState('')
   const [documentText, setDocumentText] = useState('')
@@ -92,7 +92,7 @@ export default function DocumentUpload() {
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
       >
-        <span className="rag-panel__title">Index documents</span>
+        <span className="rag-panel__title">Store documents</span>
         <span className="rag-collapse-icon">{open ? '−' : '+'}</span>
       </button>
 
