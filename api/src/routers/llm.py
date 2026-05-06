@@ -7,7 +7,7 @@ from ..dto.llm.query import QueryDto
 from ..dto.llm.search import SearchDto
 from ..entities.llm.query_response import QueryMetrics, QueryResponse
 from ..entities.llm.search_response import SearchResponse
-from ..services import evaluation_service, llm_service, vector_store_service
+from ..services import evaluation_service, llm_service, query_cache_service, vector_store_service
 from ..services.vector_store_service import MilvusStoreError
 
 router = APIRouter(prefix="/llm", tags=["llm"])
@@ -119,6 +119,9 @@ async def search_chunks(body: SearchDto) -> SearchResponse:
 @router.post("/query", response_model=QueryResponse)
 async def query_chunks(body: QueryDto) -> QueryResponse:
     try:
+        cached = await query_cache_service.get_cached_response(body)
+        if cached is not None:
+            return QueryResponse.model_validate(cached)
         t_handler = time.perf_counter()
         latencies_ms: dict[str, float] = {}
         retrieved = await vector_store_service.search(
@@ -184,11 +187,13 @@ async def query_chunks(body: QueryDto) -> QueryResponse:
             latencies_ms["query_handler_wall_ms"] = (time.perf_counter() - t_handler) * 1000.0
             raw["latencies_ms"] = evaluation_service.floor_latency_map_ms(dict(latencies_ms))
             metrics = QueryMetrics.model_validate(raw)
-        return QueryResponse(
+        response = QueryResponse(
             answer=answer,
             context_results=context_results,
             metrics=metrics,
         )
+        await query_cache_service.set_cached_response(body, response.model_dump())
+        return response
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except RuntimeError as e:

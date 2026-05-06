@@ -21,6 +21,7 @@ pydantic==2.13.3
 pydantic_core==2.46.3
 python-dotenv==1.2.2
 python-multipart==0.0.20
+redis>=5.0.0
 pymilvus==2.5.14
 rank-bm25==0.2.2
 # Cross-encoder reranker (sentence-transformers). Pin torch/transformers for reproducible installs.

@@ -14,6 +14,7 @@ Production-oriented Retrieval-Augmented Generation (RAG) application with docume
   - BM25 + RRF fusion
   - cross-encoder reranking
 - Generates grounded answers with retrieved context
+- Caches normalized query responses in Redis to reduce repeated LLM token usage and latency
 - Optionally computes evaluation diagnostics:
   - retrieval recall@k
   - citation coverage
@@ -60,9 +61,10 @@ RAG-system/
 3. Chunk + embed
 4. Store chunks/vectors in Milvus
 5. Query (`/llm/query`)
-6. Retrieve (ANN + BM25/RRF + rerank)
-7. Generate answer
-8. (Optional) Compute quality metrics
+6. Check Redis query cache (normalized query + params)
+7. Retrieve (ANN + BM25/RRF + rerank) on cache miss
+8. Generate answer
+9. (Optional) Compute quality metrics
 
 ## Key API Endpoints
 
@@ -128,6 +130,10 @@ Common variables used by the API:
 - `RAGAS_EVAL_MODEL` - optional model for evaluation
 - `RAGAS_EMBEDDING_MODEL` - embedding model used by answer relevancy
 - `MILVUS_HOST`, `MILVUS_PORT` - Milvus connection
+- `QUERY_CACHE_ENABLED` - enable/disable Redis response caching (default: `true`)
+- `QUERY_CACHE_TTL_SECONDS` - cache TTL in seconds (default: `900`)
+- `QUERY_CACHE_NAMESPACE` - key namespace prefix for cache keys (default: `rag-query-v1`)
+- `REDIS_HOST`, `REDIS_PORT`, `REDIS_DB`, `REDIS_PASSWORD` - Redis connection settings
 - `SKIP_PRISMA_CONNECT=true` - run without DB on startup
 - `PRISMA_FAIL_OPEN=true` - don't crash if Prisma connect fails
 - `SKIP_STARTUP_WARMUP=true` - disable warm-up (faster boot, slower first query)
@@ -136,6 +142,7 @@ Common variables used by the API:
 
 - Practical handling of local-model quirks and OpenAI-compatible edge cases
 - Startup warm-up to reduce cold-start latency
+- Redis-backed query caching with normalized keys for similar prompts
 - Latency instrumentation for retrieval, generation, and metrics pipeline
 - RAGAS metrics for context relevancy, faithfulness, and answer relevance
 - Robust evaluation path with graceful fallback when structured judge calls fail
