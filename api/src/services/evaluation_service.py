@@ -20,6 +20,38 @@ except ImportError:  # pragma: no cover — minimal installs without RAGAS
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+_ragas_instructor_patched = False
+
+
+def _maybe_patch_ragas_instructor_for_local(base_url: str) -> None:
+    """Force Instructor JSON_SCHEMA mode for local OpenAI-compatible endpoints.
+
+    RAGAS defaults to Instructor JSON mode, but some local servers (LM Studio variants)
+    reject that with: response_format.type must be json_schema or text.
+    """
+    global _ragas_instructor_patched
+    if _ragas_instructor_patched:
+        return
+    b = (base_url or "").lower()
+    is_local = any(h in b for h in ("localhost", "127.0.0.1", "0.0.0.0", "host.docker.internal"))
+    if not is_local:
+        return
+    try:
+        import instructor
+        import ragas.llms.base as ragas_llm_base
+
+        orig = ragas_llm_base._get_instructor_client
+
+        def _patched_get_instructor_client(client: Any, provider: str) -> Any:
+            if provider.lower() == "openai":
+                return instructor.from_openai(client, mode=instructor.Mode.JSON_SCHEMA)
+            return orig(client, provider)
+
+        ragas_llm_base._get_instructor_client = _patched_get_instructor_client
+        _ragas_instructor_patched = True
+        logger.info("Patched RAGAS Instructor mode to JSON_SCHEMA for local OpenAI endpoint")
+    except Exception as e:
+        logger.warning("Could not patch RAGAS Instructor mode: %s", e)
 
 
 def floor_latency_map_ms(values: dict[str, Any]) -> dict[str, int]:
@@ -184,6 +216,52 @@ def _coerce_score_0_1(raw: Any) -> float | None:
     return max(0.0, min(1.0, score))
 
 
+def _split_sentences_for_judge(contexts: list[str], max_sentences: int = 48) -> list[str]:
+    sentences: list[str] = []
+    for block in contexts:
+        for part in re.split(r"(?<=[\.\!\?])\s+|\n+", block):
+            s = part.strip()
+            if len(s) >= 20:
+                sentences.append(s)
+            if len(sentences) >= max_sentences:
+                return sentences
+    return sentences
+
+
+async def _context_relevance_sentence_ratio_fallback(
+    *,
+    user_input: str,
+    contexts: list[str],
+    client: AsyncOpenAI,
+    model: str,
+) -> float | None:
+    """Estimate context relevance as relevant_sentences / total_sentences using LLM labels."""
+    sents = _split_sentences_for_judge(contexts)
+    if not sents:
+        return None
+    numbered = "\n".join(f"{i+1}. {s}" for i, s in enumerate(sents))
+    prompt = (
+        "Given a user question and retrieved context sentences, mark which sentences are "
+        "relevant for answering the question.\n"
+        "Return ONLY comma-separated sentence numbers (e.g., 2,5,9). "
+        "If none are relevant, return NONE.\n\n"
+        f"Question:\n{user_input}\n\n"
+        f"Sentences:\n{numbered}\n"
+    )
+    r = await client.chat.completions.create(
+        model=model,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.0,
+        max_tokens=96,
+    )
+    raw = (r.choices[0].message.content or "").strip()
+    if not raw or raw.lower() == "none":
+        return 0.0
+    ids = [int(x) for x in re.findall(r"\b\d+\b", raw)]
+    valid = {i for i in ids if 1 <= i <= len(sents)}
+    return len(valid) / len(sents)
+
+
 def _parse_zero_one_score(text: str) -> float | None:
     """Parse a score in [0, 1] from model output.
 
@@ -291,6 +369,7 @@ async def compute_faithfulness_ragas(
         or (os.getenv("GENERATION_MODEL") or "").strip()
         or "gpt-4o-mini"
     )
+    _maybe_patch_ragas_instructor_for_local(base)
 
     if llm_factory is None or Faithfulness is None:
         logger.info("RAGAS not installed; using text-mode faithfulness judge only")
@@ -342,11 +421,11 @@ async def compute_faithfulness_ragas(
         else:
             last: BaseException | None = None
             result: Any = None
-            # LM Studio often rejects Instructor JSON mode; try litellm before default auto.
+            # Prefer Instructor first (JSON_SCHEMA patch for local OpenAI-compatible servers).
             for llm_extra in (
-                {"adapter": "litellm"},
-                {},
                 {"adapter": "instructor"},
+                {},
+                {"adapter": "litellm"},
             ):
                 try:
                     result = await _ascore_with(llm_extra)
@@ -422,6 +501,7 @@ async def compute_additional_ragas_metrics(
         or "gpt-4o-mini"
     )
     emb_model = (os.getenv("RAGAS_EMBEDDING_MODEL") or "").strip() or "text-embedding-3-small"
+    _maybe_patch_ragas_instructor_for_local(base)
 
     if (
         llm_factory is None
@@ -455,8 +535,8 @@ async def compute_additional_ragas_metrics(
     elif explicit in ("none", "minimal", "default"):
         llm_attempts = [{}]
     else:
-        # Local OpenAI-compatible servers are usually happier with litellm first.
-        llm_attempts = [{"adapter": "litellm"}, {}, {"adapter": "instructor"}]
+        # Prefer Instructor first (JSON_SCHEMA patch for local OpenAI-compatible servers).
+        llm_attempts = [{"adapter": "instructor"}, {}, {"adapter": "litellm"}]
 
     out: dict[str, dict[str, Any]] = {}
 
@@ -545,38 +625,49 @@ async def compute_additional_ragas_metrics(
 
     t1 = time.perf_counter()
     try:
-        best_score: float | None = None
-        last: Exception | None = None
-        any_success = False
+        ragas_errors: list[str] = []
+        score: float | None = None
         for llm_extra in llm_attempts:
             try:
                 llm = ragas_llm_factory(model, client=async_client, **llm_extra)
                 metric = RagasContextRelevance(llm=llm)
                 result = await metric.ascore(user_input=user_input, retrieved_contexts=contexts)
-                any_success = True
                 raw = getattr(result, "value", result)
                 score_try = _coerce_score_0_1(raw)
-                if score_try is not None:
-                    if best_score is None or score_try > best_score:
-                        best_score = score_try
+                if score_try is None:
+                    ragas_errors.append(
+                        f"adapter={llm_extra.get('adapter','auto')}: returned NaN/invalid score"
+                    )
+                    continue
+                score = score_try
+                break
             except Exception as e:
-                last = e
+                ragas_errors.append(
+                    f"adapter={llm_extra.get('adapter','auto')}: {str(e)[:200]}"
+                )
                 if _is_response_format_error(str(e)) or _is_sync_client_agenerate_error(e):
                     continue
                 raise
-        if not any_success:
-            raise last if last is not None else RuntimeError("context_relevance: no result")
-        score = best_score
         if score is None:
-            raise ValueError("context_relevance returned NaN/invalid score")
+            raise ValueError("; ".join(ragas_errors) or "context_relevance: no result")
         out["context_relevance"] = _llm_metric_payload(
             "context_relevance", score, None, (time.perf_counter() - t1) * 1000.0
         )
     except Exception as e:
         try:
-            score = await _context_relevance_text_fallback()
+            score = await _context_relevance_sentence_ratio_fallback(
+                user_input=user_input,
+                contexts=contexts,
+                client=async_client,
+                model=model,
+            )
+            if score is None:
+                score = await _context_relevance_text_fallback()
             out["context_relevance"] = _llm_metric_payload(
-                "context_relevance", score, None, (time.perf_counter() - t1) * 1000.0
+                "context_relevance",
+                score,
+                compact_faithfulness_error(f"RAGAS failed; fallback used: {e}"),
+                (time.perf_counter() - t1) * 1000.0,
             )
         except Exception as fb_e:
             err = compact_faithfulness_error(f"{e}; fallback: {fb_e}")
