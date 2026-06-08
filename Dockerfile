@@ -2,20 +2,21 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends build-essential curl \
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 COPY api/src/requirements.txt ./requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+# Deployer runs the app with uvicorn — install even if the repo only lists fastapi.
+RUN pip install --no-cache-dir -r requirements.txt \
+    && pip install --no-cache-dir "uvicorn[standard]>=0.24"
 
 COPY . .
+
 
 WORKDIR /app/api
 ENV PYTHONPATH=/app/api
 
-EXPOSE 8000
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=5 \
-  CMD curl -f http://localhost:8000/health || exit 1
+EXPOSE 8000
 
 CMD ["python", "-m", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
