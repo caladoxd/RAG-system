@@ -20,6 +20,11 @@ env:
   ECS_SERVICE: staging-rag
   CONTAINER_NAME: rag
 
+  FRONTEND_ECR_REPOSITORY: rag-staging-frontend
+  FRONTEND_ECS_SERVICE: staging-rag-frontend
+  FRONTEND_CONTAINER_NAME: rag-frontend
+
+
 jobs:
   build-and-deploy:
     name: Build, Push & Deploy
@@ -55,7 +60,9 @@ jobs:
         id: image-tag
         run: echo "tag=$(echo $GITHUB_SHA | cut -c1-7)" >> $GITHUB_OUTPUT
 
-      - name: Build and push Docker image
+      # ── Backend ──────────────────────────────────────────────────────────
+
+      - name: Build and push backend image
         env:
           IMAGE: ${{ format('{0}/{1}:{2}', steps.login-ecr.outputs.registry, env.ECR_REPOSITORY, steps.image-tag.outputs.tag) }}
         run: |
@@ -78,7 +85,7 @@ jobs:
           container-name: ${{ env.CONTAINER_NAME }}
           image: ${{ format('{0}/{1}:{2}', steps.login-ecr.outputs.registry, env.ECR_REPOSITORY, steps.image-tag.outputs.tag) }}
 
-      - name: Deploy to Amazon ECS
+      - name: Deploy backend to Amazon ECS
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2
         with:
           task-definition: ${{ steps.task-def.outputs.task-definition }}
@@ -86,3 +93,39 @@ jobs:
           cluster: ${{ env.ECS_CLUSTER }}
           wait-for-service-stability: true
           wait-for-minutes: 10
+
+
+      # ── Frontend ─────────────────────────────────────────────────────────
+
+      - name: Build and push frontend image
+        env:
+          IMAGE: ${{ format('{0}/{1}:{2}', steps.login-ecr.outputs.registry, env.FRONTEND_ECR_REPOSITORY, steps.image-tag.outputs.tag) }}
+        run: |
+          docker build -t $IMAGE -f Dockerfile.frontend .
+          docker push $IMAGE
+          docker tag $IMAGE ${{ steps.login-ecr.outputs.registry }}/${{ env.FRONTEND_ECR_REPOSITORY }}:latest
+          docker push ${{ steps.login-ecr.outputs.registry }}/${{ env.FRONTEND_ECR_REPOSITORY }}:latest
+
+      - name: Download frontend task definition
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition tsk-staging-rag-frontend \
+            --query taskDefinition > frontend-task-definition.json
+
+      - name: Update frontend task definition with new image
+        id: frontend-task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: frontend-task-definition.json
+          container-name: ${{ env.FRONTEND_CONTAINER_NAME }}
+          image: ${{ format('{0}/{1}:{2}', steps.login-ecr.outputs.registry, env.FRONTEND_ECR_REPOSITORY, steps.image-tag.outputs.tag) }}
+
+      - name: Deploy frontend to Amazon ECS
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.frontend-task-def.outputs.task-definition }}
+          service: ${{ env.FRONTEND_ECS_SERVICE }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true
+          wait-for-minutes: 10
+
