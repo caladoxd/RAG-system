@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - main
+      - staging
 
 permissions:
   contents: read
@@ -91,7 +91,8 @@ jobs:
           task-definition: ${{ steps.task-def.outputs.task-definition }}
           service: ${{ env.ECS_SERVICE }}
           cluster: ${{ env.ECS_CLUSTER }}
-          wait-for-service-stability: false
+          wait-for-service-stability: true
+          wait-for-minutes: 10
 
 
       # ── Frontend ─────────────────────────────────────────────────────────
@@ -125,4 +126,6 @@ jobs:
           task-definition: ${{ steps.frontend-task-def.outputs.task-definition }}
           service: ${{ env.FRONTEND_ECS_SERVICE }}
           cluster: ${{ env.ECS_CLUSTER }}
-          wait-for-service-stability: false
+          wait-for-service-stability: true
+          wait-for-minutes: 10
+
