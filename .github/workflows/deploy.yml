@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - main
+      - staging
 
 permissions:
   contents: read
@@ -56,11 +56,6 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Create ECR repositories if they don't exist
-        run: |
-          aws ecr create-repository --repository-name ${{ env.ECR_REPOSITORY }} --region ${{ env.AWS_REGION }} || true
-          aws ecr create-repository --repository-name ${{ env.FRONTEND_ECR_REPOSITORY }} --region ${{ env.AWS_REGION }} || true
-
       - name: Create image tag
         id: image-tag
         run: echo "tag=$(echo $GITHUB_SHA | cut -c1-7)" >> $GITHUB_OUTPUT
@@ -96,7 +91,8 @@ jobs:
           task-definition: ${{ steps.task-def.outputs.task-definition }}
           service: ${{ env.ECS_SERVICE }}
           cluster: ${{ env.ECS_CLUSTER }}
-          wait-for-service-stability: false
+          wait-for-service-stability: true
+          wait-for-minutes: 10
 
 
       # ── Frontend ─────────────────────────────────────────────────────────
@@ -130,4 +126,6 @@ jobs:
           task-definition: ${{ steps.frontend-task-def.outputs.task-definition }}
           service: ${{ env.FRONTEND_ECS_SERVICE }}
           cluster: ${{ env.ECS_CLUSTER }}
-          wait-for-service-stability: false
+          wait-for-service-stability: true
+          wait-for-minutes: 10
+
