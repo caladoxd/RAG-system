@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - staging
+      - main
 
 permissions:
   contents: read
@@ -128,4 +128,3 @@ jobs:
           cluster: ${{ env.ECS_CLUSTER }}
           wait-for-service-stability: true
           wait-for-minutes: 10
-
