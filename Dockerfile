@@ -5,13 +5,12 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-COPY api/src/requirements.txt ./requirements.txt
+COPY requirements.txt ./requirements.txt
 # Deployer runs the app with uvicorn — install even if the repo only lists fastapi.
 RUN pip install --no-cache-dir -r requirements.txt \
     && pip install --no-cache-dir "uvicorn[standard]>=0.24"
 
 COPY . .
-
 
 # Prisma Python client (prisma_client) is generated — not committed to git.
 # Schema path is repo-relative; COPY . . puts it at /app/<path>.
@@ -22,11 +21,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-cert
     && pip install --no-cache-dir prisma \
     && prisma generate --schema=/app/db/prisma/schema.prisma
 
-
-
 WORKDIR /app/api
 ENV PYTHONPATH=/app/api
-
 
 EXPOSE 8000
 
