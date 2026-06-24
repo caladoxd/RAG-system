@@ -13,6 +13,11 @@ RUN pip install --no-cache-dir -r requirements.txt \
 COPY . .
 
 
+# Prisma Python client (prisma_client) is generated — not committed to git.
+# Schema path is repo-relative; COPY . . puts it at /app/<path>.
+RUN pip install --no-cache-dir prisma \
+    && prisma generate --schema=/app/db/prisma/schema.prisma
+
 
 
 WORKDIR /app/api
