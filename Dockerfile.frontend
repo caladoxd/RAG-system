@@ -1,12 +1,26 @@
-FROM node:20-alpine
+# ── Build stage ───────────────────────────────────────────────────────────────
+FROM node:20-alpine AS build
 WORKDIR /app
 
-COPY package*.json ./
+COPY ui/package*.json ./
 
 RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
-COPY . .
+
+COPY ui/ ./
 
 RUN npm run build --if-present
-ENV NODE_ENV=production
+# Normalise the build output: Vite emits dist/, CRA emits build/.
+# Fall back to public/ (or an empty dir) so the serve stage always has content.
+RUN if [ -d dist ]; then cp -r dist /site; \
+    elif [ -d build ]; then cp -r build /site; \
+    else mkdir -p /site && cp -r public/* /site/ 2>/dev/null || true; fi
+
+# ── Serve stage ─────────────────────────────────────────────────────────────--
+# Static SPA served by nginx. Listens on 3000 so it matches the
+# ECS task container_port / ALB target group health check.
+FROM nginx:alpine
+RUN rm -rf /usr/share/nginx/html/*
+COPY --from=build /site/ /usr/share/nginx/html/
+RUN printf 'server {\n    listen       %s;\n    server_name  _;\n    root   /usr/share/nginx/html;\n    index  index.html;\n    location / {\n        try_files $uri $uri/ /index.html;\n    }\n}\n' "3000" > /etc/nginx/conf.d/default.conf
 EXPOSE 3000
-CMD ["npm", "start"]
+CMD ["nginx", "-g", "daemon off;"]
