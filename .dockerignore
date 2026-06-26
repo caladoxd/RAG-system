@@ -8,8 +8,3 @@ node_modules
 .DS_Store
 .vscode
 .idea
-__pycache__
-*.pyc
-.pytest_cache
-dist
-build

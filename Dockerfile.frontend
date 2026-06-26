@@ -2,11 +2,15 @@
 FROM node:20-alpine AS build
 WORKDIR /app
 
-COPY ui/package*.json ./
+COPY package*.json ./
 
+# Drop any host-generated lockfile before installing: lockfiles often pin
+# platform-specific optional native binaries (e.g. *-win32-*, *-darwin-*) that
+# fail to install in this Linux image (npm EBADPLATFORM). Re-resolving here
+# fetches the Linux-native variants.
 RUN rm -f package-lock.json && npm install
 
-COPY ui/ ./
+COPY . .
 
 RUN npm run build --if-present
 # Normalise the build output: Vite emits dist/, CRA emits build/.
