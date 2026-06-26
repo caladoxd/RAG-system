@@ -19,7 +19,7 @@ COPY api/src ./src
 
 # Generate Prisma client before starting the app.
 # The schema is at db/prisma/schema.prisma; set PRISMA_CLI_BINARY_TARGETS for Linux.
-RUN cd /app && npm install -g prisma \
+RUN cd /app && npm install -g prisma --force \
     && PRISMA_CLI_BINARY_TARGETS=linux-musl prisma generate --schema=db/prisma/schema.prisma
 
 ENV PYTHONPATH=/app
