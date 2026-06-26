@@ -15,6 +15,10 @@ COPY api/src ./src
 
 ENV PYTHONPATH=/app
 
+# Generate Prisma client before starting the app.
+RUN cd /app && python -m pip install prisma \
+    && python -m prisma generate --schema=db/prisma/schema.prisma
+
 EXPOSE 8000
 
 CMD ["python", "-m", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
