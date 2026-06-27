@@ -6,14 +6,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends build-essential
     && rm -rf /var/lib/apt/lists/*
 
 COPY api/src/requirements.txt ./requirements.txt
-# Deployer runs the app with uvicorn — install even if the repo only lists fastapi.
 RUN pip install --no-cache-dir -r requirements.txt \
     && pip install --no-cache-dir "uvicorn[standard]>=0.24"
 
-# Install Prisma and generate client from repo root
-RUN pip install --no-cache-dir prisma
 COPY db/prisma ./db/prisma
-RUN prisma generate --schema=/app/db/prisma/schema.prisma
+RUN pip install --no-cache-dir prisma && prisma generate --schema=./db/prisma/schema.prisma
 
 COPY api/src ./src
 
