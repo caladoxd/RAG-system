@@ -10,10 +10,10 @@ COPY api/src/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt \
     && pip install --no-cache-dir "uvicorn[standard]>=0.24"
 
-# Install Prisma generator and generate client
+# Install Prisma and generate client
 RUN pip install --no-cache-dir prisma
-COPY db/prisma/schema.prisma /app/schema.prisma
-RUN prisma generate --schema=/app/schema.prisma
+COPY db/prisma ./prisma
+RUN cd /app && prisma generate
 
 COPY api/src ./src
 
