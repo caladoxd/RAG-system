@@ -7,15 +7,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends build-essential
 
 COPY db/prisma ./prisma
 COPY api/src/requirements.txt ./requirements.txt
+
 RUN pip install --no-cache-dir -r requirements.txt \
     && pip install --no-cache-dir "uvicorn[standard]>=0.24" \
     && pip install --no-cache-dir prisma
 
-RUN prisma generate --schema=/app/prisma/schema.prisma
-
 COPY api/src ./src
 
 ENV PYTHONPATH=/app
+
+RUN cd /app && prisma generate --schema=/app/prisma/schema.prisma
 
 EXPOSE 8000
 
