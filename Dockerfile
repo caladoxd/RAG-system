@@ -9,10 +9,10 @@ COPY api/src/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt \
     && pip install --no-cache-dir "uvicorn[standard]>=0.24"
 
-COPY db/prisma ./db/prisma
-RUN pip install --no-cache-dir prisma && prisma generate --schema=/app/db/prisma/schema.prisma
-
+COPY db/prisma ./prisma
 COPY api/src ./src
+
+RUN pip install --no-cache-dir prisma && prisma generate --schema=./prisma/schema.prisma
 
 ENV PYTHONPATH=/app
 
