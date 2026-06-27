@@ -13,7 +13,7 @@ RUN pip install --no-cache-dir -r requirements.txt \
 # Install Prisma and generate client
 RUN pip install --no-cache-dir prisma
 COPY db/prisma ./prisma
-RUN PRISMA_SCHEMA_PATH=/app/prisma/schema.prisma prisma generate
+RUN python -m prisma generate --schema=./prisma/schema.prisma
 
 COPY api/src ./src
 
