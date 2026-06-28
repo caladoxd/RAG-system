@@ -24,8 +24,12 @@ COPY api ./api
 
 EXPOSE 8000
 
-# Set PYTHONPATH to include /app so 'src.main:app' resolves correctly
+# Set PYTHONPATH to include /app/api so 'src.main:app' resolves correctly
 ENV PYTHONPATH=/app/api
 
+# Add health check to diagnose startup issues
+HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=3 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()" || exit 1
+
 # Run uvicorn with correct module path relative to PYTHONPATH
-CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000", "--timeout-keep-alive", "75"]
