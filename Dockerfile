@@ -22,8 +22,10 @@ RUN pip install --no-cache-dir prisma \
 # Copy application source code
 COPY api/src ./api/src
 
+WORKDIR /app/api
+
 EXPOSE 8000
 
 # Run uvicorn with correct module path for monorepo structure
-# The app is at /app/api/src/main.py with FastAPI app exported as 'app'
+# Working directory is /app/api, so uvicorn can find src.main:app
 CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
