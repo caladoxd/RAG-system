@@ -7,25 +7,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy schema first (before WORKDIR change so path is correct)
+# Copy schema and requirements early
 COPY db/prisma ./db/prisma
 COPY api/src/requirements.txt ./api/src/requirements.txt
 
-# Install Python dependencies and prisma CLI
+# Install Python dependencies (including uvicorn)
 RUN pip install --no-cache-dir -r ./api/src/requirements.txt \
-    && pip install --no-cache-dir "uvicorn[standard]>=0.24" prisma
+    && pip install --no-cache-dir "uvicorn[standard]>=0.24"
 
-# Generate prisma client from /app context (before WORKDIR change)
-# If DATABASE_URL is not available at build time, prisma generate may fail.
-# Use SKIP_ENGINE_CHECK or continue even if it fails, since the schema is present.
-RUN prisma generate --schema=./db/prisma/schema.prisma || true
+# Install prisma CLI and generate client
+RUN pip install --no-cache-dir prisma \
+    && prisma generate --schema=./db/prisma/schema.prisma
 
-# Copy source code
+# Copy application source code
 COPY api/src ./api/src
-
-# Set working directory for app execution
-WORKDIR /app
 
 EXPOSE 8000
 
-CMD ["uvicorn", "api.src.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Run uvicorn with correct module path for monorepo structure
+# The app is at /app/api/src/main.py with FastAPI app exported as 'app'
+CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
