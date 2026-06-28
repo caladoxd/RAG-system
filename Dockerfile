@@ -8,14 +8,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY db/prisma ./db/prisma
-COPY api/src/requirements.txt ./requirements.txt
+COPY api/src/requirements.txt ./api/src/requirements.txt
 
-RUN pip install --no-cache-dir -r requirements.txt \
+RUN pip install --no-cache-dir -r ./api/src/requirements.txt \
     && pip install --no-cache-dir "uvicorn[standard]>=0.24" prisma
 
 RUN prisma generate --schema=./db/prisma/schema.prisma
 
-COPY api/src ./src
+COPY api/src ./api/src
+
+WORKDIR /app/api
 
 ENV PYTHONPATH=/app
 
