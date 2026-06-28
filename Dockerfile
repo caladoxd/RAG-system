@@ -2,7 +2,9 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends build-essential \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 COPY db/prisma ./prisma
@@ -16,8 +18,8 @@ COPY api/src ./src
 
 ENV PYTHONPATH=/app
 
-RUN cd /app && prisma generate --schema=/app/prisma/schema.prisma
+RUN prisma generate --schema=/app/prisma/schema.prisma
 
 EXPOSE 8000
 
-CMD ["python", "-m", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
