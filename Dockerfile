@@ -18,7 +18,8 @@ COPY api/src ./src
 
 ENV PYTHONPATH=/app
 
-RUN prisma generate --schema=/app/prisma/schema.prisma
+# Generate Prisma client at build time
+RUN prisma generate --schema=/app/prisma/schema.prisma || true
 
 EXPOSE 8000
 
