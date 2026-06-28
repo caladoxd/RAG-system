@@ -22,9 +22,10 @@ RUN pip install --no-cache-dir prisma \
 # Copy entire api directory to ensure all source files are present
 COPY api ./api
 
-WORKDIR /app
-
 EXPOSE 8000
 
-# Run uvicorn from /app with Python path configured to find src module
-CMD ["python", "-m", "uvicorn", "api.src.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Set PYTHONPATH to include /app so 'src.main:app' resolves correctly
+ENV PYTHONPATH=/app/api
+
+# Run uvicorn with correct module path relative to PYTHONPATH
+CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
