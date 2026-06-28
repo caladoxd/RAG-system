@@ -19,13 +19,12 @@ RUN pip install --no-cache-dir -r ./api/src/requirements.txt \
 RUN pip install --no-cache-dir prisma \
     && prisma generate --schema=./db/prisma/schema.prisma
 
-# Copy application source code
-COPY api/src ./api/src
+# Copy entire api directory to ensure all source files are present
+COPY api ./api
 
-WORKDIR /app/api
+WORKDIR /app
 
 EXPOSE 8000
 
-# Run uvicorn with correct module path for monorepo structure
-# Working directory is /app/api, so uvicorn can find src.main:app
-CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Run uvicorn from /app with Python path configured to find src module
+CMD ["python", "-m", "uvicorn", "api.src.main:app", "--host", "0.0.0.0", "--port", "8000"]
