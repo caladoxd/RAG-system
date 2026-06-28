@@ -7,7 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-COPY db/prisma ./prisma
+COPY db/prisma ./db/prisma
 COPY api/src/requirements.txt ./requirements.txt
 
 RUN pip install --no-cache-dir -r requirements.txt \
@@ -19,7 +19,7 @@ COPY api/src ./src
 ENV PYTHONPATH=/app
 
 # Generate Prisma client at build time
-RUN prisma generate --schema=/app/prisma/schema.prisma || true
+RUN prisma generate --schema=./db/prisma/schema.prisma || true
 
 EXPOSE 8000
 
