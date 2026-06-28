@@ -2,7 +2,7 @@
 FROM node:20-alpine AS build
 WORKDIR /app
 
-COPY package*.json ./
+COPY ui/package*.json ./
 
 # Drop any host-generated lockfile before installing: lockfiles often pin
 # platform-specific optional native binaries (e.g. *-win32-*, *-darwin-*) that
@@ -10,7 +10,7 @@ COPY package*.json ./
 # fetches the Linux-native variants.
 RUN rm -f package-lock.json && npm install
 
-COPY . .
+COPY ui/ .
 
 RUN npm run build --if-present
 # Normalise the build output: Vite emits dist/, CRA emits build/.
@@ -19,7 +19,7 @@ RUN if [ -d dist ]; then cp -r dist /site; \
     elif [ -d build ]; then cp -r build /site; \
     else mkdir -p /site && cp -r public/* /site/ 2>/dev/null || true; fi
 
-# ── Serve stage ─────────────────────────────────────────────────────────────--
+# ── Serve stage ─────────────────────────────────────────────────────────────
 # Static SPA served by nginx. Listens on 3000 so it matches the
 # ECS task container_port / ALB target group health check.
 FROM nginx:alpine
