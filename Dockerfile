@@ -17,10 +17,8 @@ RUN prisma generate --schema=./db/prisma/schema.prisma
 
 COPY api/src ./api/src
 
-WORKDIR /app/api
-
-ENV PYTHONPATH=/app
+WORKDIR /app
 
 EXPOSE 8000
 
-CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "api.src.main:app", "--host", "0.0.0.0", "--port", "8000"]
